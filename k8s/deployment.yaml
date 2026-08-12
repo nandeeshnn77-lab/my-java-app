@@ -25,10 +25,11 @@ spec:
 
     spec:
       containers:
-
         - name: myapp
 
           image: PLACEHOLDER_IMAGE
+
+          imagePullPolicy: IfNotPresent
 
           ports:
             - containerPort: 8080
