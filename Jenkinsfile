@@ -2,11 +2,16 @@ pipeline {
 
     agent any
 
+
+    // =========================================================
+    // ENVIRONMENT
+    // =========================================================
+
     environment {
 
-        // =====================================================
+        // -----------------------------------------------------
         // AWS
-        // =====================================================
+        // -----------------------------------------------------
 
         AWS_REGION = 'ap-south-1'
 
@@ -15,24 +20,38 @@ pipeline {
         EKS_CLUSTER = 'my-eks-cluster'
 
 
-        // =====================================================
-        // SONARQUBE
-        // =====================================================
+        // -----------------------------------------------------
+        // Kubernetes
+        // -----------------------------------------------------
+
+        K8S_NAMESPACE = 'myapp'
+
+        K8S_DEPLOYMENT = 'myapp'
+
+        K8S_CONTAINER = 'myapp'
+
+
+        // -----------------------------------------------------
+        // SonarQube
+        // -----------------------------------------------------
 
         SONARQUBE_SERVER = 'SonarQube'
 
         SONAR_PROJECT_KEY = 'my-java-app'
 
-        SONAR_MAVEN_PLUGIN_VERSION = '5.7.0.6970'
 
-
-        // =====================================================
-        // DOCKER
-        // =====================================================
+        // -----------------------------------------------------
+        // Docker
+        // -----------------------------------------------------
 
         IMAGE_TAG = "${BUILD_NUMBER}"
+
     }
 
+
+    // =========================================================
+    // STAGES
+    // =========================================================
 
     stages {
 
@@ -44,6 +63,10 @@ pipeline {
         stage('Checkout') {
 
             steps {
+
+                echo '======================================'
+                echo 'CHECKOUT SOURCE CODE'
+                echo '======================================'
 
                 checkout scm
             }
@@ -58,56 +81,101 @@ pipeline {
 
             steps {
 
-                sh '''
-                    echo "=============================================="
-                    echo "VERIFY JENKINS WORKSPACE"
-                    echo "=============================================="
+                dir("${WORKSPACE}") {
 
-                    echo "User:"
-                    whoami
+                    sh '''
+                        set -e
 
-                    echo "HOME:"
-                    echo "$HOME"
+                        echo "======================================"
+                        echo "VERIFY JENKINS WORKSPACE"
+                        echo "======================================"
 
-                    echo "WORKSPACE:"
-                    echo "$WORKSPACE"
+                        echo "User:"
+                        whoami
 
-                    echo "Current Directory:"
-                    pwd
+                        echo ""
+                        echo "HOME:"
+                        echo "$HOME"
 
-                    echo ""
-                    echo "Workspace Files:"
-                    ls -la
+                        echo ""
+                        echo "WORKSPACE:"
+                        echo "$WORKSPACE"
 
-                    echo ""
-                    echo "Searching for pom.xml:"
-                    find "$WORKSPACE" -maxdepth 3 -name pom.xml -print
+                        echo ""
+                        echo "Current directory:"
+                        pwd
 
-                    echo ""
+                        echo ""
+                        echo "Workspace files:"
+                        ls -la
 
-                    if [ ! -f "$WORKSPACE/pom.xml" ]; then
-                        echo "ERROR: pom.xml was not found!"
-                        echo "Current directory: $(pwd)"
-                        echo "Workspace: $WORKSPACE"
-                        exit 1
-                    fi
+                        echo ""
+                        echo "Searching for pom.xml:"
+                        find "$WORKSPACE" -name pom.xml -print
 
-                    echo "SUCCESS: pom.xml found"
+                        echo ""
+                        echo "Checking pom.xml..."
 
-                    echo ""
-                    echo "Maven Version:"
-                    mvn -version
+                        if [ ! -f "$WORKSPACE/pom.xml" ]; then
+                            echo "ERROR: pom.xml NOT FOUND"
+                            exit 1
+                        fi
 
-                    echo ""
-                    echo "Java Version:"
-                    java -version
-                '''
+                        echo "SUCCESS: pom.xml found"
+
+                        echo ""
+                        echo "POM location:"
+                        ls -lh "$WORKSPACE/pom.xml"
+                    '''
+                }
             }
         }
 
 
         // =====================================================
-        // 3. BUILD & TEST
+        // 3. JAVA / MAVEN CHECK
+        // =====================================================
+
+        stage('Check Java and Maven') {
+
+            steps {
+
+                dir("${WORKSPACE}") {
+
+                    sh '''
+                        set -e
+
+                        echo "======================================"
+                        echo "JAVA AND MAVEN"
+                        echo "======================================"
+
+                        echo ""
+                        echo "Java version:"
+                        java -version
+
+                        echo ""
+                        echo "Maven version:"
+                        mvn -version
+
+                        echo ""
+                        echo "Maven HOME:"
+                        echo "$M2_HOME"
+
+                        echo ""
+                        echo "HOME:"
+                        echo "$HOME"
+
+                        echo ""
+                        echo "Workspace:"
+                        pwd
+                    '''
+                }
+            }
+        }
+
+
+        // =====================================================
+        // 4. BUILD & TEST
         // =====================================================
 
         stage('Build & Test') {
@@ -117,19 +185,47 @@ pipeline {
                 dir("${WORKSPACE}") {
 
                     sh '''
-                        echo "=============================================="
-                        echo "BUILD & TEST"
-                        echo "=============================================="
+                        set -e
 
+                        echo "======================================"
+                        echo "BUILD AND TEST"
+                        echo "======================================"
+
+                        echo "Current directory:"
                         pwd
 
-                        echo "Checking pom.xml..."
+                        echo ""
+                        echo "POM:"
                         ls -lh pom.xml
 
                         echo ""
-                        echo "Running Maven build and tests..."
+                        echo "Cleaning old build..."
 
-                        mvn clean test package
+                        mvn clean
+
+
+                        echo ""
+                        echo "Running unit tests..."
+
+                        mvn test
+
+
+                        echo ""
+                        echo "Creating JAR..."
+
+                        mvn package -DskipTests
+
+
+                        echo ""
+                        echo "Build artifacts:"
+
+                        ls -lh target/
+
+
+                        echo ""
+                        echo "Checking JAR..."
+
+                        ls -lh target/*.jar
                     '''
                 }
             }
@@ -137,7 +233,7 @@ pipeline {
 
 
         // =====================================================
-        // 4. SONARQUBE ANALYSIS
+        // 5. SONARQUBE ANALYSIS
         // =====================================================
 
         stage('SonarQube Analysis') {
@@ -149,35 +245,39 @@ pipeline {
                     withSonarQubeEnv("${SONARQUBE_SERVER}") {
 
                         sh '''
-                            echo "=============================================="
-                            echo "SONARQUBE ANALYSIS"
-                            echo "=============================================="
+                            set -e
 
-                            echo "User:"
+                            echo "======================================"
+                            echo "SONARQUBE ANALYSIS"
+                            echo "======================================"
+
+                            echo "Current user:"
                             whoami
 
+                            echo ""
                             echo "HOME:"
                             echo "$HOME"
 
+                            echo ""
                             echo "Workspace:"
-                            echo "$WORKSPACE"
-
-                            echo "Current Directory:"
                             pwd
 
                             echo ""
-                            echo "Checking pom.xml..."
+                            echo "Checking POM:"
                             ls -lh pom.xml
 
-                            echo ""
-                            echo "Running SonarQube analysis..."
 
-                            mvn clean verify \
-                            org.sonarsource.scanner.maven:sonar-maven-plugin:${SONAR_MAVEN_PLUGIN_VERSION}:sonar \
+                            echo ""
+                            echo "Running SonarQube..."
+
+
+                            mvn \
+                            org.sonarsource.scanner.maven:sonar-maven-plugin:5.7.0.6970:sonar \
                             -Dsonar.projectKey=${SONAR_PROJECT_KEY}
 
+
                             echo ""
-                            echo "SonarQube analysis completed."
+                            echo "SonarQube analysis completed"
                         '''
                     }
                 }
@@ -186,14 +286,16 @@ pipeline {
 
 
         // =====================================================
-        // 5. SONARQUBE QUALITY GATE
+        // 6. SONARQUBE QUALITY GATE
         // =====================================================
 
         stage('SonarQube Quality Gate') {
 
             steps {
 
-                echo "Waiting for SonarQube Quality Gate..."
+                echo "======================================"
+                echo "SONARQUBE QUALITY GATE"
+                echo "======================================"
 
                 timeout(time: 5, unit: 'MINUTES') {
 
@@ -204,7 +306,7 @@ pipeline {
 
 
         // =====================================================
-        // 6. GET AWS ACCOUNT ID
+        // 7. GET AWS ACCOUNT
         // =====================================================
 
         stage('Get AWS Account') {
@@ -212,6 +314,11 @@ pipeline {
             steps {
 
                 script {
+
+                    echo "======================================"
+                    echo "AWS ACCOUNT INFORMATION"
+                    echo "======================================"
+
 
                     env.AWS_ACCOUNT_ID = sh(
                         script: '''
@@ -231,51 +338,96 @@ pipeline {
                         "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}"
 
 
-                    echo "=============================================="
-                    echo "AWS INFORMATION"
-                    echo "=============================================="
+                    echo "AWS Account ID:"
+                    echo "${env.AWS_ACCOUNT_ID}"
 
-                    echo "AWS Account ID: ${env.AWS_ACCOUNT_ID}"
 
-                    echo "AWS Region: ${env.AWS_REGION}"
+                    echo "AWS Region:"
+                    echo "${env.AWS_REGION}"
 
-                    echo "ECR Registry: ${env.ECR_REGISTRY}"
 
-                    echo "Image URI: ${env.IMAGE_URI}:${env.IMAGE_TAG}"
+                    echo "ECR Registry:"
+                    echo "${env.ECR_REGISTRY}"
+
+
+                    echo "Image:"
+                    echo "${env.IMAGE_URI}:${env.IMAGE_TAG}"
                 }
             }
         }
 
 
         // =====================================================
-        // 7. DOCKER BUILD
+        // 8. CHECK DOCKER
         // =====================================================
 
-        stage('Docker Build') {
+        stage('Check Docker') {
 
             steps {
 
                 sh '''
-                    echo "=============================================="
-                    echo "DOCKER BUILD"
-                    echo "=============================================="
+                    set -e
 
-                    echo "Building Docker image:"
+                    echo "======================================"
+                    echo "DOCKER CHECK"
+                    echo "======================================"
 
-                    docker build \
-                        -t ${IMAGE_URI}:${IMAGE_TAG} .
+                    docker --version
 
                     echo ""
-                    echo "Docker image created successfully."
+                    echo "Docker information:"
 
-                    docker images | grep "${ECR_REPOSITORY}" || true
+                    docker info
                 '''
             }
         }
 
 
         // =====================================================
-        // 8. TRIVY IMAGE SECURITY SCAN
+        // 9. DOCKER BUILD
+        // =====================================================
+
+        stage('Docker Build') {
+
+            steps {
+
+                dir("${WORKSPACE}") {
+
+                    sh '''
+                        set -e
+
+                        echo "======================================"
+                        echo "DOCKER BUILD"
+                        echo "======================================"
+
+                        echo "Dockerfile:"
+                        ls -lh Dockerfile
+
+
+                        echo ""
+                        echo "Building image:"
+
+                        echo "${IMAGE_URI}:${IMAGE_TAG}"
+
+
+                        docker build \
+                            -t "${IMAGE_URI}:${IMAGE_TAG}" \
+                            .
+
+
+                        echo ""
+                        echo "Docker image created successfully:"
+
+
+                        docker images | grep "${ECR_REPOSITORY}" || true
+                    '''
+                }
+            }
+        }
+
+
+        // =====================================================
+        // 10. TRIVY SECURITY SCAN
         // =====================================================
 
         stage('Trivy Image Scan') {
@@ -283,25 +435,37 @@ pipeline {
             steps {
 
                 sh '''
-                    echo "=============================================="
-                    echo "TRIVY SECURITY SCAN"
-                    echo "=============================================="
+                    set -e
 
-                    echo "Scanning image:"
+                    echo "======================================"
+                    echo "TRIVY SECURITY SCAN"
+                    echo "======================================"
+
+                    echo "Image:"
                     echo "${IMAGE_URI}:${IMAGE_TAG}"
 
+
+                    echo ""
+                    echo "Starting vulnerability scan..."
+
+
                     trivy image \
-                        --exit-code 1 \
+                        --scanners vuln \
                         --severity HIGH,CRITICAL \
                         --ignore-unfixed \
-                        ${IMAGE_URI}:${IMAGE_TAG}
+                        --exit-code 1 \
+                        "${IMAGE_URI}:${IMAGE_TAG}"
+
+
+                    echo ""
+                    echo "Trivy scan completed successfully"
                 '''
             }
         }
 
 
         // =====================================================
-        // 9. LOGIN TO AWS ECR
+        // 11. LOGIN TO ECR
         // =====================================================
 
         stage('Login to ECR') {
@@ -309,22 +473,55 @@ pipeline {
             steps {
 
                 sh '''
-                    echo "=============================================="
+                    set -e
+
+                    echo "======================================"
                     echo "LOGIN TO AWS ECR"
-                    echo "=============================================="
+                    echo "======================================"
 
                     aws ecr get-login-password \
-                        --region ${AWS_REGION} | \
+                        --region "${AWS_REGION}" | \
                     docker login \
                         --username AWS \
-                        --password-stdin ${ECR_REGISTRY}
+                        --password-stdin "${ECR_REGISTRY}"
+
+
+                    echo ""
+                    echo "ECR login successful"
                 '''
             }
         }
 
 
         // =====================================================
-        // 10. PUSH IMAGE TO ECR
+        // 12. CHECK ECR REPOSITORY
+        // =====================================================
+
+        stage('Check ECR Repository') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "CHECK ECR REPOSITORY"
+                    echo "======================================"
+
+                    aws ecr describe-repositories \
+                        --repository-names "${ECR_REPOSITORY}" \
+                        --region "${AWS_REGION}"
+
+
+                    echo ""
+                    echo "ECR repository exists"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 13. PUSH IMAGE TO ECR
         // =====================================================
 
         stage('Push Image to ECR') {
@@ -332,154 +529,297 @@ pipeline {
             steps {
 
                 sh '''
-                    echo "=============================================="
+                    set -e
+
+                    echo "======================================"
                     echo "PUSH IMAGE TO ECR"
-                    echo "=============================================="
+                    echo "======================================"
 
                     echo "Pushing:"
                     echo "${IMAGE_URI}:${IMAGE_TAG}"
 
-                    docker push ${IMAGE_URI}:${IMAGE_TAG}
+
+                    docker push \
+                        "${IMAGE_URI}:${IMAGE_TAG}"
+
 
                     echo ""
-                    echo "Docker image pushed successfully."
+                    echo "Docker image pushed successfully"
                 '''
             }
         }
 
 
         // =====================================================
-        // 11. DEPLOY TO EKS
+        // 14. VERIFY ECR IMAGE
         // =====================================================
 
-        stage('Deploy to EKS') {
+        stage('Verify ECR Image') {
 
             steps {
 
                 sh '''
-                    echo "=============================================="
-                    echo "DEPLOY TO EKS"
-                    echo "=============================================="
+                    set -e
+
+                    echo "======================================"
+                    echo "VERIFY ECR IMAGE"
+                    echo "======================================"
 
 
-                    // -----------------------------------------
-                    // AWS EKS KUBECONFIG
-                    // -----------------------------------------
+                    aws ecr describe-images \
+                        --repository-name "${ECR_REPOSITORY}" \
+                        --image-ids imageTag="${IMAGE_TAG}" \
+                        --region "${AWS_REGION}"
+
+
+                    echo ""
+                    echo "Image exists in ECR"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 15. UPDATE KUBECONFIG
+        // =====================================================
+
+        stage('Configure EKS') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "CONFIGURE EKS"
+                    echo "======================================"
+
 
                     echo "Updating kubeconfig..."
 
+
                     aws eks update-kubeconfig \
-                        --region ${AWS_REGION} \
-                        --name ${EKS_CLUSTER}
+                        --region "${AWS_REGION}" \
+                        --name "${EKS_CLUSTER}"
 
-
-                    // -----------------------------------------
-                    // CHECK KUBERNETES CONNECTION
-                    // -----------------------------------------
 
                     echo ""
                     echo "Checking Kubernetes connection..."
 
+
+                    kubectl cluster-info
+
+
+                    echo ""
+                    echo "Kubernetes nodes:"
+
+
                     kubectl get nodes
-
-
-                    // -----------------------------------------
-                    // NAMESPACE
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Applying namespace..."
-
-                    kubectl apply -f k8s/namespace.yaml
-
-
-                    // -----------------------------------------
-                    // DEPLOYMENT
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Applying deployment..."
-
-                    kubectl apply -f k8s/deployment.yaml
-
-
-                    // -----------------------------------------
-                    // SERVICE
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Applying service..."
-
-                    kubectl apply -f k8s/service.yaml
-
-
-                    // -----------------------------------------
-                    // INGRESS
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Applying ingress..."
-
-                    kubectl apply -f k8s/ingress.yaml
-
-
-                    // -----------------------------------------
-                    // UPDATE IMAGE
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Updating deployment image..."
-
-                    kubectl -n myapp set image deployment/myapp \
-                        myapp=${IMAGE_URI}:${IMAGE_TAG}
-
-
-                    // -----------------------------------------
-                    // ROLLOUT
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Waiting for deployment rollout..."
-
-                    kubectl -n myapp rollout status deployment/myapp \
-                        --timeout=5m
-
-
-                    // -----------------------------------------
-                    // POD STATUS
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Pods:"
-
-                    kubectl -n myapp get pods -o wide
-
-
-                    // -----------------------------------------
-                    // DEPLOYMENT STATUS
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Deployment:"
-
-                    kubectl -n myapp get deployment
-
-
-                    // -----------------------------------------
-                    // SERVICE STATUS
-                    // -----------------------------------------
-
-                    echo ""
-                    echo "Service:"
-
-                    kubectl -n myapp get service
-
-
-                    echo ""
-                    echo "EKS deployment completed successfully."
                 '''
             }
         }
+
+
+        // =====================================================
+        // 16. CREATE NAMESPACE
+        // =====================================================
+
+        stage('Create Kubernetes Namespace') {
+
+            steps {
+
+                dir("${WORKSPACE}") {
+
+                    sh '''
+                        set -e
+
+                        echo "======================================"
+                        echo "KUBERNETES NAMESPACE"
+                        echo "======================================"
+
+
+                        if [ -f k8s/namespace.yaml ]; then
+
+                            kubectl apply \
+                                -f k8s/namespace.yaml
+
+                        else
+
+                            echo "namespace.yaml not found"
+                            echo "Creating namespace manually..."
+
+                            kubectl create namespace "${K8S_NAMESPACE}" \
+                                --dry-run=client \
+                                -o yaml | kubectl apply -f -
+
+                        fi
+
+
+                        echo ""
+                        echo "Namespace:"
+
+                        kubectl get namespace "${K8S_NAMESPACE}"
+                    '''
+                }
+            }
+        }
+
+
+        // =====================================================
+        // 17. DEPLOY KUBERNETES APPLICATION
+        // =====================================================
+
+        stage('Deploy Application') {
+
+            steps {
+
+                dir("${WORKSPACE}") {
+
+                    sh '''
+                        set -e
+
+                        echo "======================================"
+                        echo "DEPLOY APPLICATION"
+                        echo "======================================"
+
+
+                        echo "Applying deployment..."
+
+
+                        kubectl apply \
+                            -f k8s/deployment.yaml
+
+
+                        echo ""
+                        echo "Applying service..."
+
+
+                        kubectl apply \
+                            -f k8s/service.yaml
+
+
+                        echo ""
+                        echo "Applying ingress..."
+
+
+                        if [ -f k8s/ingress.yaml ]; then
+
+                            kubectl apply \
+                                -f k8s/ingress.yaml
+
+                        else
+
+                            echo "Ingress file not found - skipping"
+
+                        fi
+                    '''
+                }
+            }
+        }
+
+
+        // =====================================================
+        // 18. UPDATE IMAGE
+        // =====================================================
+
+        stage('Update Deployment Image') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "UPDATE DEPLOYMENT IMAGE"
+                    echo "======================================"
+
+
+                    echo "New image:"
+                    echo "${IMAGE_URI}:${IMAGE_TAG}"
+
+
+                    kubectl -n "${K8S_NAMESPACE}" \
+                        set image deployment/"${K8S_DEPLOYMENT}" \
+                        "${K8S_CONTAINER}"="${IMAGE_URI}:${IMAGE_TAG}"
+
+
+                    echo ""
+                    echo "Deployment image updated"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 19. ROLLOUT
+        // =====================================================
+
+        stage('Kubernetes Rollout') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "KUBERNETES ROLLOUT"
+                    echo "======================================"
+
+
+                    kubectl -n "${K8S_NAMESPACE}" \
+                        rollout status \
+                        deployment/"${K8S_DEPLOYMENT}" \
+                        --timeout=5m
+
+
+                    echo ""
+                    echo "Rollout successful"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 20. VERIFY APPLICATION
+        // =====================================================
+
+        stage('Verify Deployment') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "VERIFY KUBERNETES DEPLOYMENT"
+                    echo "======================================"
+
+
+                    echo "Deployment:"
+                    kubectl -n "${K8S_NAMESPACE}" \
+                        get deployment
+
+
+                    echo ""
+                    echo "Pods:"
+                    kubectl -n "${K8S_NAMESPACE}" \
+                        get pods -o wide
+
+
+                    echo ""
+                    echo "Services:"
+                    kubectl -n "${K8S_NAMESPACE}" \
+                        get services
+
+
+                    echo ""
+                    echo "Ingress:"
+                    kubectl -n "${K8S_NAMESPACE}" \
+                        get ingress || true
+                '''
+            }
+        }
+
     }
 
 
@@ -493,18 +833,7 @@ pipeline {
 
             echo '''
             ==============================================
-            CI/CD PIPELINE SUCCESSFUL
-            ==============================================
-
-            Build       : SUCCESS
-            Tests       : SUCCESS
-            SonarQube   : SUCCESS
-            QualityGate : PASSED
-            Docker      : SUCCESS
-            Trivy       : PASSED
-            ECR         : SUCCESS
-            EKS         : SUCCESS
-
+                    CI/CD PIPELINE SUCCESSFUL
             ==============================================
             '''
         }
@@ -514,11 +843,7 @@ pipeline {
 
             echo '''
             ==============================================
-            CI/CD PIPELINE FAILED
-            ==============================================
-
-            Check the failed stage above.
-
+                    CI/CD PIPELINE FAILED
             ==============================================
             '''
         }
@@ -528,17 +853,11 @@ pipeline {
 
             echo "=============================================="
             echo "PIPELINE COMPLETED"
+            echo "STATUS: ${currentBuild.currentResult}"
             echo "=============================================="
-
-            echo "Build Number: ${BUILD_NUMBER}"
-
-            echo "Build Result: ${currentBuild.currentResult}"
-
-            echo "Workspace: ${WORKSPACE}"
 
 
             sh '''
-                echo ""
                 echo "Cleaning unused Docker images..."
 
                 docker image prune -f || true
