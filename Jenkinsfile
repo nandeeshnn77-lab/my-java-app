@@ -5,12 +5,25 @@ pipeline {
     environment {
 
         // =====================================================
-        // AWS
+        // AWS / ECR
         // =====================================================
 
         AWS_REGION = 'ap-south-1'
         ECR_REPOSITORY = 'my-java-app'
-        EKS_CLUSTER = 'my-eks-cluster'
+
+        // =====================================================
+        // DOCKER
+        // =====================================================
+
+        IMAGE_NAME = 'my-java-app'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+
+        // =====================================================
+        // KIND KUBERNETES
+        // =====================================================
+
+        KIND_CLUSTER = 'mycluster'
+        KUBE_NAMESPACE = 'myapp'
 
         // =====================================================
         // SONARQUBE
@@ -18,15 +31,11 @@ pipeline {
 
         SONARQUBE_SERVER = 'SonarQube'
         SONAR_PROJECT_KEY = 'my-java-app'
-
-        // =====================================================
-        // DOCKER
-        // =====================================================
-
-        IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
+
     stages {
+
 
         // =====================================================
         // 1. CHECKOUT
@@ -37,7 +46,7 @@ pipeline {
             steps {
 
                 echo '======================================'
-                echo 'CHECKOUT'
+                echo 'CHECKOUT FROM GITHUB'
                 echo '======================================'
 
                 checkout scm
@@ -76,7 +85,10 @@ pipeline {
                     ls -la
 
                     echo "Searching for pom.xml:"
-                    find "$WORKSPACE" -name pom.xml -print
+
+                    find "$WORKSPACE" \
+                        -name pom.xml \
+                        -print
 
                     if [ ! -f "$WORKSPACE/pom.xml" ]; then
                         echo "ERROR: pom.xml not found"
@@ -110,13 +122,14 @@ pipeline {
                     echo "Maven version:"
                     mvn -version
 
-                    echo "Building application..."
+                    echo "Running Maven build..."
 
                     mvn clean test package
 
                     echo "Build completed successfully"
 
-                    echo "Generated files:"
+                    echo "Target directory:"
+
                     ls -lh target/
                 '''
             }
@@ -140,10 +153,7 @@ pipeline {
                         echo "SONARQUBE ANALYSIS"
                         echo "======================================"
 
-                        echo "Checking pom.xml:"
-                        ls -lh pom.xml
-
-                        echo "Running SonarQube analysis..."
+                        echo "Running SonarQube..."
 
                         mvn sonar:sonar \
                             -Dsonar.projectKey="${SONAR_PROJECT_KEY}"
@@ -172,7 +182,7 @@ pipeline {
                     waitForQualityGate abortPipeline: true
                 }
 
-                echo "SonarQube Quality Gate passed"
+                echo "Quality Gate PASSED"
             }
         }
 
@@ -188,7 +198,7 @@ pipeline {
                 script {
 
                     echo "======================================"
-                    echo "AWS ACCOUNT"
+                    echo "GET AWS ACCOUNT"
                     echo "======================================"
 
                     env.AWS_ACCOUNT_ID = sh(
@@ -200,23 +210,58 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
+
                     env.ECR_REGISTRY =
                         "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+
 
                     env.IMAGE_URI =
                         "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}"
 
-                    echo "AWS Account ID: ${env.AWS_ACCOUNT_ID}"
-                    echo "AWS Region: ${env.AWS_REGION}"
-                    echo "ECR Registry: ${env.ECR_REGISTRY}"
-                    echo "Image URI: ${env.IMAGE_URI}:${env.IMAGE_TAG}"
+
+                    echo "AWS Account:"
+                    echo "${env.AWS_ACCOUNT_ID}"
+
+                    echo "AWS Region:"
+                    echo "${env.AWS_REGION}"
+
+                    echo "ECR Registry:"
+                    echo "${env.ECR_REGISTRY}"
+
+                    echo "Image:"
+                    echo "${env.IMAGE_URI}:${env.IMAGE_TAG}"
                 }
             }
         }
 
 
         // =====================================================
-        // 7. DOCKER BUILD
+        // 7. VERIFY ECR REPOSITORY
+        // =====================================================
+
+        stage('Verify ECR Repository') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "VERIFY ECR REPOSITORY"
+                    echo "======================================"
+
+                    aws ecr describe-repositories \
+                        --repository-names "${ECR_REPOSITORY}" \
+                        --region "${AWS_REGION}"
+
+                    echo "ECR repository exists"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 8. DOCKER BUILD
         // =====================================================
 
         stage('Docker Build') {
@@ -231,6 +276,7 @@ pipeline {
                     echo "======================================"
 
                     echo "Docker version:"
+
                     docker --version
 
                     echo "Building image:"
@@ -240,14 +286,45 @@ pipeline {
 
                     echo "Docker image created successfully"
 
-                    docker images | grep my-java-app || true
+                    docker images | grep "${IMAGE_NAME}" || true
                 '''
             }
         }
 
 
         // =====================================================
-        // 8. LOGIN TO ECR
+        // 9. TRIVY IMAGE SCAN
+        // =====================================================
+
+        stage('Trivy Scan') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "TRIVY SECURITY SCAN"
+                    echo "======================================"
+
+                    echo "Scanning image:"
+
+                    echo "${IMAGE_URI}:${IMAGE_TAG}"
+
+                    trivy image \
+                        --exit-code 1 \
+                        --severity HIGH,CRITICAL \
+                        --ignore-unfixed \
+                        "${IMAGE_URI}:${IMAGE_TAG}"
+
+                    echo "Trivy scan PASSED"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 10. LOGIN TO ECR
         // =====================================================
 
         stage('Login to ECR') {
@@ -260,8 +337,6 @@ pipeline {
                     echo "======================================"
                     echo "LOGIN TO ECR"
                     echo "======================================"
-
-                    echo "Logging into ECR..."
 
                     aws ecr get-login-password \
                         --region "${AWS_REGION}" | \
@@ -276,7 +351,7 @@ pipeline {
 
 
         // =====================================================
-        // 9. PUSH IMAGE TO ECR
+        // 11. PUSH IMAGE TO ECR
         // =====================================================
 
         stage('Push Image to ECR') {
@@ -290,22 +365,24 @@ pipeline {
                     echo "PUSH IMAGE TO ECR"
                     echo "======================================"
 
-                    echo "Pushing:"
+                    echo "Pushing image:"
+
                     echo "${IMAGE_URI}:${IMAGE_TAG}"
 
-                    docker push "${IMAGE_URI}:${IMAGE_TAG}"
+                    docker push \
+                        "${IMAGE_URI}:${IMAGE_TAG}"
 
-                    echo "Docker image pushed successfully"
+                    echo "Image pushed successfully"
                 '''
             }
         }
 
 
         // =====================================================
-        // 10. DEPLOY TO EKS
+        // 12. VERIFY KIND CLUSTER
         // =====================================================
 
-        stage('Deploy to EKS') {
+        stage('Verify Kind Cluster') {
 
             steps {
 
@@ -313,75 +390,238 @@ pipeline {
                     set -e
 
                     echo "======================================"
-                    echo "DEPLOY TO EKS"
+                    echo "VERIFY KIND CLUSTER"
                     echo "======================================"
 
-                    echo "AWS CLI:"
-                    aws --version
+                    echo "Available Kind clusters:"
 
-                    echo "Kubectl:"
+                    kind get clusters
+
+                    if ! kind get clusters | grep -q "^${KIND_CLUSTER}$"; then
+
+                        echo "ERROR: Kind cluster '${KIND_CLUSTER}' not found"
+
+                        echo "Create it first using:"
+                        echo "kind create cluster --name ${KIND_CLUSTER}"
+
+                        exit 1
+                    fi
+
+                    echo "Kind cluster exists"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 13. LOAD IMAGE INTO KIND
+        // =====================================================
+
+        stage('Load Image into Kind') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "LOAD IMAGE INTO KIND"
+                    echo "======================================"
+
+                    kind load docker-image \
+                        "${IMAGE_URI}:${IMAGE_TAG}" \
+                        --name "${KIND_CLUSTER}"
+
+                    echo "Image loaded into Kind successfully"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 14. VERIFY KUBERNETES
+        // =====================================================
+
+        stage('Verify Kubernetes') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "VERIFY KUBERNETES"
+                    echo "======================================"
+
                     kubectl version --client
 
-                    echo "Updating kubeconfig..."
+                    echo "Kubernetes nodes:"
 
-                    aws eks update-kubeconfig \
-                        --region "${AWS_REGION}" \
-                        --name "${EKS_CLUSTER}"
+                    kubectl get nodes
 
-                    echo "Kubeconfig updated successfully"
+                    echo "Kubernetes cluster information:"
 
+                    kubectl cluster-info
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 15. CREATE NAMESPACE
+        // =====================================================
+
+        stage('Create Namespace') {
+
+            steps {
+
+                sh '''
+                    set -e
 
                     echo "======================================"
                     echo "CREATE NAMESPACE"
                     echo "======================================"
 
-                    kubectl apply -f k8s/namespace.yaml
+                    kubectl apply \
+                        -f k8s/namespace.yaml
+                '''
+            }
+        }
 
+
+        // =====================================================
+        // 16. DEPLOY APPLICATION
+        // =====================================================
+
+        stage('Deploy Application') {
+
+            steps {
+
+                sh '''
+                    set -e
 
                     echo "======================================"
                     echo "DEPLOY APPLICATION"
                     echo "======================================"
 
-                    kubectl apply -f k8s/deployment.yaml
+                    kubectl apply \
+                        -f k8s/deployment.yaml
+                '''
+            }
+        }
 
+
+        // =====================================================
+        // 17. CREATE SERVICE
+        // =====================================================
+
+        stage('Create Service') {
+
+            steps {
+
+                sh '''
+                    set -e
 
                     echo "======================================"
                     echo "CREATE SERVICE"
                     echo "======================================"
 
-                    kubectl apply -f k8s/service.yaml
+                    kubectl apply \
+                        -f k8s/service.yaml
+                '''
+            }
+        }
 
+
+        // =====================================================
+        // 18. UPDATE IMAGE
+        // =====================================================
+
+        stage('Update Image') {
+
+            steps {
+
+                sh '''
+                    set -e
 
                     echo "======================================"
-                    echo "CREATE INGRESS"
+                    echo "UPDATE KUBERNETES IMAGE"
                     echo "======================================"
 
-                    kubectl apply -f k8s/ingress.yaml
-
-
-                    echo "======================================"
-                    echo "UPDATE IMAGE"
-                    echo "======================================"
-
-                    kubectl -n myapp set image deployment/myapp \
+                    kubectl -n "${KUBE_NAMESPACE}" \
+                        set image deployment/myapp \
                         myapp="${IMAGE_URI}:${IMAGE_TAG}"
 
+                    echo "Image updated to:"
+
+                    kubectl -n "${KUBE_NAMESPACE}" \
+                        get deployment myapp \
+                        -o=jsonpath='{.spec.template.spec.containers[0].image}'
+
+                    echo
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 19. ROLLOUT STATUS
+        // =====================================================
+
+        stage('Rollout Status') {
+
+            steps {
+
+                sh '''
+                    set -e
 
                     echo "======================================"
                     echo "ROLLOUT STATUS"
                     echo "======================================"
 
-                    kubectl -n myapp rollout status deployment/myapp \
+                    kubectl -n "${KUBE_NAMESPACE}" \
+                        rollout status deployment/myapp \
                         --timeout=5m
 
+                    echo "Rollout successful"
+                '''
+            }
+        }
+
+
+        // =====================================================
+        // 20. VERIFY APPLICATION
+        // =====================================================
+
+        stage('Verify Application') {
+
+            steps {
+
+                sh '''
+                    set -e
 
                     echo "======================================"
-                    echo "DEPLOYMENT SUCCESSFUL"
+                    echo "VERIFY APPLICATION"
                     echo "======================================"
 
-                    kubectl -n myapp get deployment
-                    kubectl -n myapp get pods
-                    kubectl -n myapp get service
+                    echo "Deployment:"
+                    kubectl -n "${KUBE_NAMESPACE}" \
+                        get deployment
+
+                    echo
+                    echo "Pods:"
+                    kubectl -n "${KUBE_NAMESPACE}" \
+                        get pods -o wide
+
+                    echo
+                    echo "Service:"
+                    kubectl -n "${KUBE_NAMESPACE}" \
+                        get service
+
+                    echo
+                    echo "Endpoints:"
+                    kubectl -n "${KUBE_NAMESPACE}" \
+                        get endpoints
                 '''
             }
         }
@@ -397,24 +637,52 @@ pipeline {
         success {
 
             echo '''
-            ======================================
+            =========================================
             CI/CD PIPELINE SUCCESSFUL
-            ======================================
+            =========================================
+
+            GitHub
+               ↓
+            Maven
+               ↓
+            SonarQube
+               ↓
+            Quality Gate
+               ↓
+            Docker
+               ↓
+            Trivy
+               ↓
+            ECR
+               ↓
+            Kind Kubernetes
+               ↓
+            NodePort
+               ↓
+            Browser
+
+            =========================================
             '''
         }
+
 
         failure {
 
             echo '''
-            ======================================
+            =========================================
             CI/CD PIPELINE FAILED
-            ======================================
+            =========================================
+
+            Check the failed stage above.
+
+            =========================================
             '''
         }
 
+
         always {
 
-            echo "Pipeline completed with status: ${currentBuild.currentResult}"
+            echo "Pipeline status: ${currentBuild.currentResult}"
 
             sh '''
                 echo "Cleaning unused Docker images..."
