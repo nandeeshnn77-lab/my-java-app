@@ -5,25 +5,11 @@ pipeline {
     environment {
 
         // =====================================================
-        // AWS / ECR
+        // AWS
         // =====================================================
 
         AWS_REGION = 'ap-south-1'
         ECR_REPOSITORY = 'my-java-app'
-
-        // =====================================================
-        // DOCKER
-        // =====================================================
-
-        IMAGE_NAME = 'my-java-app'
-        IMAGE_TAG = "${BUILD_NUMBER}"
-
-        // =====================================================
-        // KIND KUBERNETES
-        // =====================================================
-
-        KIND_CLUSTER = 'mycluster'
-        KUBE_NAMESPACE = 'myapp'
 
         // =====================================================
         // SONARQUBE
@@ -31,14 +17,18 @@ pipeline {
 
         SONARQUBE_SERVER = 'SonarQube'
         SONAR_PROJECT_KEY = 'my-java-app'
-    }
 
+        // =====================================================
+        // DOCKER
+        // =====================================================
+
+        IMAGE_TAG = "${BUILD_NUMBER}"
+    }
 
     stages {
 
-
         // =====================================================
-        // 1. CHECKOUT
+        // 1. CHECKOUT FROM GITHUB
         // =====================================================
 
         stage('Checkout') {
@@ -72,11 +62,17 @@ pipeline {
                     echo "User:"
                     whoami
 
-                    echo "HOME:"
-                    echo "$HOME"
+                    echo "Java:"
+                    java -version
 
-                    echo "WORKSPACE:"
-                    echo "$WORKSPACE"
+                    echo "Maven:"
+                    mvn -version
+
+                    echo "Docker:"
+                    docker --version
+
+                    echo "Kubectl:"
+                    kubectl version --client
 
                     echo "Current directory:"
                     pwd
@@ -84,13 +80,9 @@ pipeline {
                     echo "Files:"
                     ls -la
 
-                    echo "Searching for pom.xml:"
+                    echo "Checking pom.xml..."
 
-                    find "$WORKSPACE" \
-                        -name pom.xml \
-                        -print
-
-                    if [ ! -f "$WORKSPACE/pom.xml" ]; then
+                    if [ ! -f pom.xml ]; then
                         echo "ERROR: pom.xml not found"
                         exit 1
                     fi
@@ -116,19 +108,11 @@ pipeline {
                     echo "BUILD & TEST"
                     echo "======================================"
 
-                    echo "Java version:"
-                    java -version
-
-                    echo "Maven version:"
-                    mvn -version
-
-                    echo "Running Maven build..."
-
                     mvn clean test package
 
-                    echo "Build completed successfully"
-
-                    echo "Target directory:"
+                    echo "======================================"
+                    echo "BUILD SUCCESSFUL"
+                    echo "======================================"
 
                     ls -lh target/
                 '''
@@ -152,8 +136,6 @@ pipeline {
                         echo "======================================"
                         echo "SONARQUBE ANALYSIS"
                         echo "======================================"
-
-                        echo "Running SonarQube..."
 
                         mvn sonar:sonar \
                             -Dsonar.projectKey="${SONAR_PROJECT_KEY}"
@@ -182,7 +164,7 @@ pipeline {
                     waitForQualityGate abortPipeline: true
                 }
 
-                echo "Quality Gate PASSED"
+                echo "SonarQube Quality Gate PASSED"
             }
         }
 
@@ -210,26 +192,16 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-
                     env.ECR_REGISTRY =
                         "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
-
 
                     env.IMAGE_URI =
                         "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}"
 
-
-                    echo "AWS Account:"
-                    echo "${env.AWS_ACCOUNT_ID}"
-
-                    echo "AWS Region:"
-                    echo "${env.AWS_REGION}"
-
-                    echo "ECR Registry:"
-                    echo "${env.ECR_REGISTRY}"
-
-                    echo "Image:"
-                    echo "${env.IMAGE_URI}:${env.IMAGE_TAG}"
+                    echo "AWS Account: ${env.AWS_ACCOUNT_ID}"
+                    echo "AWS Region: ${env.AWS_REGION}"
+                    echo "ECR Registry: ${env.ECR_REGISTRY}"
+                    echo "Image: ${env.IMAGE_URI}:${env.IMAGE_TAG}"
                 }
             }
         }
@@ -275,27 +247,21 @@ pipeline {
                     echo "DOCKER BUILD"
                     echo "======================================"
 
-                    echo "Docker version:"
-
                     docker --version
-
-                    echo "Building image:"
 
                     docker build \
                         -t "${IMAGE_URI}:${IMAGE_TAG}" .
 
                     echo "Docker image created successfully"
 
-                    docker images | grep "${IMAGE_NAME}" || true
+                    docker images | grep my-java-app || true
                 '''
             }
         }
 
 
-       
-
         // =====================================================
-        // 10. LOGIN TO ECR
+        // 9. LOGIN TO ECR
         // =====================================================
 
         stage('Login to ECR') {
@@ -322,7 +288,7 @@ pipeline {
 
 
         // =====================================================
-        // 11. PUSH IMAGE TO ECR
+        // 10. PUSH IMAGE TO ECR
         // =====================================================
 
         stage('Push Image to ECR') {
@@ -336,10 +302,6 @@ pipeline {
                     echo "PUSH IMAGE TO ECR"
                     echo "======================================"
 
-                    echo "Pushing image:"
-
-                    echo "${IMAGE_URI}:${IMAGE_TAG}"
-
                     docker push \
                         "${IMAGE_URI}:${IMAGE_TAG}"
 
@@ -350,10 +312,10 @@ pipeline {
 
 
         // =====================================================
-        // 12. VERIFY KIND CLUSTER
+        // 11. CHECK KIND CLUSTER
         // =====================================================
 
-        stage('Verify Kind Cluster') {
+        stage('Check Kind Cluster') {
 
             steps {
 
@@ -361,31 +323,26 @@ pipeline {
                     set -e
 
                     echo "======================================"
-                    echo "VERIFY KIND CLUSTER"
+                    echo "CHECK KIND CLUSTER"
                     echo "======================================"
 
-                    echo "Available Kind clusters:"
+                    kind version
 
+                    echo "Kind clusters:"
                     kind get clusters
 
-                    if ! kind get clusters | grep -q "^${KIND_CLUSTER}$"; then
+                    echo "Kubernetes nodes:"
+                    kubectl get nodes
 
-                        echo "ERROR: Kind cluster '${KIND_CLUSTER}' not found"
-
-                        echo "Create it first using:"
-                        echo "kind create cluster --name ${KIND_CLUSTER}"
-
-                        exit 1
-                    fi
-
-                    echo "Kind cluster exists"
+                    echo "Current context:"
+                    kubectl config current-context
                 '''
             }
         }
 
 
         // =====================================================
-        // 13. LOAD IMAGE INTO KIND
+        // 12. LOAD IMAGE INTO KIND
         // =====================================================
 
         stage('Load Image into Kind') {
@@ -400,8 +357,7 @@ pipeline {
                     echo "======================================"
 
                     kind load docker-image \
-                        "${IMAGE_URI}:${IMAGE_TAG}" \
-                        --name "${KIND_CLUSTER}"
+                        "${IMAGE_URI}:${IMAGE_TAG}"
 
                     echo "Image loaded into Kind successfully"
                 '''
@@ -410,36 +366,7 @@ pipeline {
 
 
         // =====================================================
-        // 14. VERIFY KUBERNETES
-        // =====================================================
-
-        stage('Verify Kubernetes') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "======================================"
-                    echo "VERIFY KUBERNETES"
-                    echo "======================================"
-
-                    kubectl version --client
-
-                    echo "Kubernetes nodes:"
-
-                    kubectl get nodes
-
-                    echo "Kubernetes cluster information:"
-
-                    kubectl cluster-info
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 15. CREATE NAMESPACE
+        // 13. CREATE NAMESPACE
         // =====================================================
 
         stage('Create Namespace') {
@@ -461,7 +388,7 @@ pipeline {
 
 
         // =====================================================
-        // 16. DEPLOY APPLICATION
+        // 14. DEPLOY APPLICATION
         // =====================================================
 
         stage('Deploy Application') {
@@ -483,7 +410,7 @@ pipeline {
 
 
         // =====================================================
-        // 17. CREATE SERVICE
+        // 15. CREATE SERVICE
         // =====================================================
 
         stage('Create Service') {
@@ -505,7 +432,7 @@ pipeline {
 
 
         // =====================================================
-        // 18. UPDATE IMAGE
+        // 16. UPDATE IMAGE
         // =====================================================
 
         stage('Update Image') {
@@ -516,27 +443,19 @@ pipeline {
                     set -e
 
                     echo "======================================"
-                    echo "UPDATE KUBERNETES IMAGE"
+                    echo "UPDATE APPLICATION IMAGE"
                     echo "======================================"
 
-                    kubectl -n "${KUBE_NAMESPACE}" \
-                        set image deployment/myapp \
+                    kubectl -n myapp set image \
+                        deployment/myapp \
                         myapp="${IMAGE_URI}:${IMAGE_TAG}"
-
-                    echo "Image updated to:"
-
-                    kubectl -n "${KUBE_NAMESPACE}" \
-                        get deployment myapp \
-                        -o=jsonpath='{.spec.template.spec.containers[0].image}'
-
-                    echo
                 '''
             }
         }
 
 
         // =====================================================
-        // 19. ROLLOUT STATUS
+        // 17. ROLLOUT
         // =====================================================
 
         stage('Rollout Status') {
@@ -550,18 +469,16 @@ pipeline {
                     echo "ROLLOUT STATUS"
                     echo "======================================"
 
-                    kubectl -n "${KUBE_NAMESPACE}" \
-                        rollout status deployment/myapp \
+                    kubectl -n myapp rollout status \
+                        deployment/myapp \
                         --timeout=5m
-
-                    echo "Rollout successful"
                 '''
             }
         }
 
 
         // =====================================================
-        // 20. VERIFY APPLICATION
+        // 18. VERIFY APPLICATION
         // =====================================================
 
         stage('Verify Application') {
@@ -576,23 +493,16 @@ pipeline {
                     echo "======================================"
 
                     echo "Deployment:"
-                    kubectl -n "${KUBE_NAMESPACE}" \
-                        get deployment
+                    kubectl -n myapp get deployment
 
-                    echo
                     echo "Pods:"
-                    kubectl -n "${KUBE_NAMESPACE}" \
-                        get pods -o wide
+                    kubectl -n myapp get pods -o wide
 
-                    echo
                     echo "Service:"
-                    kubectl -n "${KUBE_NAMESPACE}" \
-                        get service
+                    kubectl -n myapp get service
 
-                    echo
-                    echo "Endpoints:"
-                    kubectl -n "${KUBE_NAMESPACE}" \
-                        get endpoints
+                    echo "Application details:"
+                    kubectl -n myapp describe service myapp || true
                 '''
             }
         }
@@ -608,48 +518,36 @@ pipeline {
         success {
 
             echo '''
-            =========================================
+            ======================================
             CI/CD PIPELINE SUCCESSFUL
-            =========================================
-
+            ======================================
             GitHub
-               ↓
+              ↓
             Maven
-               ↓
+              ↓
             SonarQube
-               ↓
-            Quality Gate
-               ↓
+              ↓
             Docker
-               ↓
-            Trivy
-               ↓
+              ↓
             ECR
-               ↓
+              ↓
             Kind Kubernetes
-               ↓
-            NodePort
-               ↓
-            Browser
-
-            =========================================
+              ↓
+            Application
+            ======================================
             '''
         }
-
 
         failure {
 
             echo '''
-            =========================================
+            ======================================
             CI/CD PIPELINE FAILED
-            =========================================
-
+            ======================================
             Check the failed stage above.
-
-            =========================================
+            ======================================
             '''
         }
-
 
         always {
 
