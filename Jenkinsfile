@@ -341,29 +341,21 @@ pipeline {
         }
 
 
-        // =====================================================
-        // 12. LOAD IMAGE INTO KIND
-        // =====================================================
-
         stage('Load Image into Kind') {
+    steps {
+        sh '''
+            set -e
 
-            steps {
+            echo "Loading image into Kind..."
 
-                sh '''
-                    set -e
+            kind load docker-image \
+                "${IMAGE_URI}:${IMAGE_TAG}" \
+                --name devops-cluster
 
-                    echo "======================================"
-                    echo "LOAD IMAGE INTO KIND"
-                    echo "======================================"
-
-                    kind load docker-image \
-                        "${IMAGE_URI}:${IMAGE_TAG}"
-
-                    echo "Image loaded into Kind successfully"
-                '''
-            }
-        }
-
+            echo "Image loaded successfully"
+        '''
+    }
+}    
 
         // =====================================================
         // 13. CREATE NAMESPACE
