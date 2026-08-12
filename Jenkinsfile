@@ -4,24 +4,30 @@ pipeline {
 
     environment {
 
+        // ==============================
         // AWS
+        // ==============================
         AWS_REGION = 'ap-south-1'
         ECR_REPOSITORY = 'my-java-app'
         EKS_CLUSTER = 'my-eks-cluster'
 
-        // SonarQube
+        // ==============================
+        // SONARQUBE
+        // ==============================
         SONARQUBE_SERVER = 'SonarQube'
         SONAR_PROJECT_KEY = 'my-java-app'
 
-        // Docker
+        // ==============================
+        // DOCKER
+        // ==============================
         IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
     stages {
 
-        // =========================================================
+        // ==============================
         // 1. CHECKOUT
-        // =========================================================
+        // ==============================
 
         stage('Checkout') {
             steps {
@@ -30,44 +36,45 @@ pipeline {
         }
 
 
-        // =========================================================
+        // ==============================
         // 2. VERIFY WORKSPACE
-        // =========================================================
+        // ==============================
 
         stage('Verify Workspace') {
             steps {
                 sh '''
                     echo "======================================"
-                    echo "WORKSPACE"
+                    echo "VERIFY WORKSPACE"
                     echo "======================================"
 
                     echo "WORKSPACE = $WORKSPACE"
 
                     pwd
 
-                    echo "Files:"
+                    echo "Files in workspace:"
                     ls -la
 
                     echo "Searching for pom.xml:"
                     find "$WORKSPACE" -name pom.xml -print
 
                     if [ ! -f "$WORKSPACE/pom.xml" ]; then
-                        echo "ERROR: pom.xml not found in Jenkins workspace"
+                        echo "ERROR: pom.xml not found!"
                         exit 1
                     fi
 
-                    echo "pom.xml found successfully"
+                    echo "SUCCESS: pom.xml found."
                 '''
             }
         }
 
 
-        // =========================================================
+        // ==============================
         // 3. BUILD & TEST
-        // =========================================================
+        // ==============================
 
         stage('Build & Test') {
             steps {
+
                 dir("${WORKSPACE}") {
 
                     sh '''
@@ -84,9 +91,9 @@ pipeline {
         }
 
 
-        // =========================================================
+        // ==============================
         // 4. SONARQUBE ANALYSIS
-        // =========================================================
+        // ==============================
 
         stage('SonarQube Analysis') {
             steps {
@@ -100,12 +107,13 @@ pipeline {
                             echo "SONARQUBE ANALYSIS"
                             echo "======================================"
 
+                            echo "Workspace:"
                             pwd
 
-                            echo "Checking pom.xml..."
-                            ls -l pom.xml
+                            echo "Checking POM:"
+                            ls -lh pom.xml
 
-                            echo "Running SonarQube..."
+                            echo "Running SonarQube analysis..."
 
                             mvn sonar:sonar \
                                 -Dsonar.projectKey=${SONAR_PROJECT_KEY}
@@ -116,12 +124,14 @@ pipeline {
         }
 
 
-        // =========================================================
-        // 5. SONARQUBE QUALITY GATE
-        // =========================================================
+        // ==============================
+        // 5. QUALITY GATE
+        // ==============================
 
         stage('SonarQube Quality Gate') {
             steps {
+
+                echo "Waiting for SonarQube Quality Gate..."
 
                 timeout(time: 5, unit: 'MINUTES') {
 
@@ -131,9 +141,9 @@ pipeline {
         }
 
 
-        // =========================================================
-        // 6. GET AWS ACCOUNT ID
-        // =========================================================
+        // ==============================
+        // 6. GET AWS ACCOUNT
+        // ==============================
 
         stage('Get AWS Account') {
             steps {
@@ -157,15 +167,15 @@ pipeline {
 
                     echo "AWS Account ID: ${env.AWS_ACCOUNT_ID}"
                     echo "ECR Registry: ${env.ECR_REGISTRY}"
-                    echo "Image URI: ${env.IMAGE_URI}:${env.IMAGE_TAG}"
+                    echo "Docker Image: ${env.IMAGE_URI}:${env.IMAGE_TAG}"
                 }
             }
         }
 
 
-        // =========================================================
+        // ==============================
         // 7. DOCKER BUILD
-        // =========================================================
+        // ==============================
 
         stage('Docker Build') {
             steps {
@@ -182,9 +192,9 @@ pipeline {
         }
 
 
-        // =========================================================
-        // 8. TRIVY SECURITY SCAN
-        // =========================================================
+        // ==============================
+        // 8. TRIVY SCAN
+        // ==============================
 
         stage('Trivy Image Scan') {
             steps {
@@ -204,9 +214,9 @@ pipeline {
         }
 
 
-        // =========================================================
-        // 9. LOGIN TO AWS ECR
-        // =========================================================
+        // ==============================
+        // 9. LOGIN TO ECR
+        // ==============================
 
         stage('Login to ECR') {
             steps {
@@ -226,9 +236,9 @@ pipeline {
         }
 
 
-        // =========================================================
-        // 10. PUSH IMAGE TO ECR
-        // =========================================================
+        // ==============================
+        // 10. PUSH IMAGE
+        // ==============================
 
         stage('Push Image to ECR') {
             steps {
@@ -244,9 +254,9 @@ pipeline {
         }
 
 
-        // =========================================================
+        // ==============================
         // 11. DEPLOY TO EKS
-        // =========================================================
+        // ==============================
 
         stage('Deploy to EKS') {
             steps {
@@ -263,35 +273,41 @@ pipeline {
                         --name ${EKS_CLUSTER}
 
 
-                    echo "Creating namespace..."
+                    echo "Applying namespace..."
 
-                    kubectl apply -f k8s/namespace.yaml
-
-
-                    echo "Deploying application..."
-
-                    kubectl apply -f k8s/deployment.yaml
+                    kubectl apply \
+                        -f k8s/namespace.yaml
 
 
-                    echo "Creating service..."
+                    echo "Applying deployment..."
 
-                    kubectl apply -f k8s/service.yaml
-
-
-                    echo "Creating ingress..."
-
-                    kubectl apply -f k8s/ingress.yaml
+                    kubectl apply \
+                        -f k8s/deployment.yaml
 
 
-                    echo "Updating deployment image..."
+                    echo "Applying service..."
 
-                    kubectl -n myapp set image deployment/myapp \
+                    kubectl apply \
+                        -f k8s/service.yaml
+
+
+                    echo "Applying ingress..."
+
+                    kubectl apply \
+                        -f k8s/ingress.yaml
+
+
+                    echo "Updating application image..."
+
+                    kubectl -n myapp set image \
+                        deployment/myapp \
                         myapp=${IMAGE_URI}:${IMAGE_TAG}
 
 
-                    echo "Waiting for rollout..."
+                    echo "Waiting for deployment rollout..."
 
-                    kubectl -n myapp rollout status deployment/myapp \
+                    kubectl -n myapp rollout status \
+                        deployment/myapp \
                         --timeout=5m
                 '''
             }
@@ -299,28 +315,28 @@ pipeline {
     }
 
 
-    // =============================================================
+    // ==============================
     // POST ACTIONS
-    // =============================================================
+    // ==============================
 
     post {
 
         success {
 
             echo '''
-            ======================================
-            CI/CD PIPELINE SUCCESSFUL
-            ======================================
-            '''
+========================================
+CI/CD PIPELINE SUCCESSFUL
+========================================
+'''
         }
 
         failure {
 
             echo '''
-            ======================================
-            CI/CD PIPELINE FAILED
-            ======================================
-            '''
+========================================
+CI/CD PIPELINE FAILED
+========================================
+'''
         }
 
         always {
@@ -328,7 +344,7 @@ pipeline {
             echo "Pipeline completed with status: ${currentBuild.currentResult}"
 
             sh '''
-                echo "Cleaning Jenkins workspace..."
+                echo "Removing unused Docker images..."
 
                 docker image prune -f || true
             '''
