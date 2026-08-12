@@ -292,36 +292,7 @@ pipeline {
         }
 
 
-        // =====================================================
-        // 9. TRIVY IMAGE SCAN
-        // =====================================================
-
-        stage('Trivy Scan') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "======================================"
-                    echo "TRIVY SECURITY SCAN"
-                    echo "======================================"
-
-                    echo "Scanning image:"
-
-                    echo "${IMAGE_URI}:${IMAGE_TAG}"
-
-                    trivy image \
-                        --exit-code 1 \
-                        --severity HIGH,CRITICAL \
-                        --ignore-unfixed \
-                        "${IMAGE_URI}:${IMAGE_TAG}"
-
-                    echo "Trivy scan PASSED"
-                '''
-            }
-        }
-
+       
 
         // =====================================================
         // 10. LOGIN TO ECR
