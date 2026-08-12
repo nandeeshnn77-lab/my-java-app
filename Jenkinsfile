@@ -25,9 +25,7 @@ pipeline {
 
         stage('Build & Test') {
             steps {
-                sh '''
-                    mvn clean test package
-                '''
+                sh 'mvn clean test package'
             }
         }
 
@@ -69,6 +67,9 @@ pipeline {
 
                     env.IMAGE_URI =
                         "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}"
+
+                    echo "ECR Registry: ${env.ECR_REGISTRY}"
+                    echo "Image: ${env.IMAGE_URI}:${env.IMAGE_TAG}"
                 }
             }
         }
@@ -83,7 +84,7 @@ pipeline {
             }
         }
 
-        stage('Trivy Scan') {
+        stage('Trivy Image Scan') {
             steps {
 
                 sh '''
@@ -128,11 +129,11 @@ pipeline {
 
                     kubectl apply -f k8s/namespace.yaml
 
+                    kubectl apply -f k8s/deployment.yaml
+
                     kubectl apply -f k8s/service.yaml
 
                     kubectl apply -f k8s/ingress.yaml
-
-                    kubectl apply -f k8s/deployment.yaml
 
                     kubectl -n myapp set image deployment/myapp \
                     myapp=${IMAGE_URI}:${IMAGE_TAG}
@@ -152,6 +153,10 @@ pipeline {
 
         failure {
             echo 'CI/CD PIPELINE FAILED'
+        }
+
+        always {
+            echo "Pipeline completed: ${currentBuild.currentResult}"
         }
     }
 }
