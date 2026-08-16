@@ -1,7 +1,8 @@
 pipeline {
 
-    agent any
-
+    agent {
+        label 'Devops-Worker'
+    }
     environment {
 
         // =====================================================
