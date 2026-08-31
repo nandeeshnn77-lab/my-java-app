@@ -19,14 +19,18 @@ spec:
       app: myapp
 
   template:
+
     metadata:
       labels:
         app: myapp
 
     spec:
+
       imagePullSecrets:
         - name: ecr-secret
+
       containers:
+
         - name: {{ .Values.container.name }}
 
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -38,6 +42,7 @@ spec:
               protocol: TCP
 
           resources:
+
             requests:
               cpu: {{ .Values.resources.requests.cpu | quote }}
               memory: {{ .Values.resources.requests.memory | quote }}
