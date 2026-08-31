@@ -1,5 +1,3 @@
-// Jenkinsfile
-
 pipeline {
 
     agent {
@@ -11,11 +9,12 @@ pipeline {
         ECR_REPOSITORY = 'my-java-app'
         IMAGE_TAG      = "${BUILD_NUMBER}"
 
-        KIND_CLUSTER   = 'devops-cluster'
-        NAMESPACE      = 'myapp'
-
         HELM_RELEASE   = 'my-java-app'
         HELM_CHART     = './helm/my-java-app'
+
+        GITOPS_REPO    = 'https://github.com/nandeeshnn77-lab/my-java-app-gitops.git'
+        GITOPS_BRANCH  = 'main'
+        GITOPS_VALUES  = 'helm/my-java-app/values.yaml'
     }
 
     options {
@@ -53,14 +52,6 @@ pipeline {
                     aws --version
                     aws sts get-caller-identity
 
-                    echo "===== KIND ====="
-                    kind version
-                    kind get clusters
-
-                    echo "===== KUBERNETES ====="
-                    kubectl config current-context
-                    kubectl get nodes
-
                     echo "===== HELM ====="
                     helm version
                 '''
@@ -71,6 +62,8 @@ pipeline {
             steps {
                 sh '''
                     set -e
+
+                    echo "===== MAVEN BUILD ====="
                     mvn clean test package
                 '''
             }
@@ -95,7 +88,9 @@ pipeline {
                     env.IMAGE_URI =
                         "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}"
 
-                    echo "Image: ${env.IMAGE_URI}:${env.IMAGE_TAG}"
+                    echo "AWS Account: ${env.AWS_ACCOUNT_ID}"
+                    echo "ECR Registry: ${env.ECR_REGISTRY}"
+                    echo "Docker Image: ${env.IMAGE_URI}:${env.IMAGE_TAG}"
                 }
             }
         }
@@ -105,13 +100,15 @@ pipeline {
                 sh '''
                     set -e
 
+                    echo "===== VERIFY ECR REPOSITORY ====="
+
                     if aws ecr describe-repositories \
                         --repository-names "${ECR_REPOSITORY}" \
                         --region "${AWS_REGION}" >/dev/null 2>&1
                     then
                         echo "ECR repository exists."
                     else
-                        echo "Creating ECR repository."
+                        echo "Creating ECR repository..."
 
                         aws ecr create-repository \
                             --repository-name "${ECR_REPOSITORY}" \
@@ -126,6 +123,8 @@ pipeline {
                 sh '''
                     set -e
 
+                    echo "===== DOCKER BUILD ====="
+
                     docker build \
                         -t "${IMAGE_URI}:${IMAGE_TAG}" \
                         .
@@ -137,6 +136,8 @@ pipeline {
             steps {
                 sh '''
                     set -e
+
+                    echo "===== ECR LOGIN ====="
 
                     aws ecr get-login-password \
                         --region "${AWS_REGION}" \
@@ -152,56 +153,24 @@ pipeline {
                 sh '''
                     set -e
 
+                    echo "===== PUSH IMAGE TO ECR ====="
+
                     docker push "${IMAGE_URI}:${IMAGE_TAG}"
                 '''
             }
         }
 
-        stage('Check KIND Cluster') {
+        stage('Verify Image in ECR') {
             steps {
                 sh '''
                     set -e
 
-                    if ! kind get clusters | grep -q "^${KIND_CLUSTER}$"
-                    then
-                        echo "KIND cluster ${KIND_CLUSTER} not found"
-                        exit 1
-                    fi
+                    echo "===== VERIFY IMAGE ====="
 
-                    kubectl get nodes
-                '''
-            }
-        }
-
-        stage('Create Namespace') {
-            steps {
-                sh '''
-                    set -e
-
-                    kubectl create namespace "${NAMESPACE}" \
-                        --dry-run=client \
-                        -o yaml \
-                    | kubectl apply -f -
-                '''
-            }
-        }
-
-        stage('Create ECR Pull Secret') {
-            steps {
-                sh '''
-                    set -e
-
-                    ECR_PASSWORD=$(aws ecr get-login-password \
-                        --region "${AWS_REGION}")
-
-                    kubectl create secret docker-registry ecr-secret \
-                        --namespace "${NAMESPACE}" \
-                        --docker-server="${ECR_REGISTRY}" \
-                        --docker-username=AWS \
-                        --docker-password="${ECR_PASSWORD}" \
-                        --dry-run=client \
-                        -o yaml \
-                    | kubectl apply -f -
+                    aws ecr describe-images \
+                        --repository-name "${ECR_REPOSITORY}" \
+                        --region "${AWS_REGION}" \
+                        --image-ids imageTag="${IMAGE_TAG}"
                 '''
             }
         }
@@ -210,6 +179,9 @@ pipeline {
             steps {
                 sh '''
                     set -e
+
+                    echo "===== HELM LINT ====="
+
                     helm lint "${HELM_CHART}"
                 '''
             }
@@ -220,51 +192,97 @@ pipeline {
                 sh '''
                     set -e
 
+                    echo "===== HELM TEMPLATE VALIDATION ====="
+
                     helm template \
                         "${HELM_RELEASE}" \
                         "${HELM_CHART}" \
-                        --namespace "${NAMESPACE}" \
                         --set image.repository="${IMAGE_URI}" \
                         --set image.tag="${IMAGE_TAG}" \
                         > /tmp/rendered-manifests.yaml
+
+                    echo "Helm template validation successful."
                 '''
             }
         }
 
-        stage('Helm Deploy') {
-            steps {
-                sh '''
-                    set -e
+        stage('Update GitOps Repository') {
 
-                    helm upgrade --install \
-                        "${HELM_RELEASE}" \
-                        "${HELM_CHART}" \
-                        --namespace "${NAMESPACE}" \
-                        --create-namespace \
-                        --set image.repository="${IMAGE_URI}" \
-                        --set image.tag="${IMAGE_TAG}" \
-                        --wait \
-                        --timeout 5m
-                '''
+            steps {
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'github-credentials',
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_TOKEN'
+                    )
+                ]) {
+
+                    sh '''
+                        set -e
+
+                        echo "===== UPDATE GITOPS REPOSITORY ====="
+
+                        rm -rf gitops-repo
+
+                        git clone \
+                            --branch "${GITOPS_BRANCH}" \
+                            "https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/nandeeshnn77-lab/my-java-app-gitops.git" \
+                            gitops-repo
+
+                        cd gitops-repo
+
+                        echo "Current image configuration:"
+                        grep -A3 '^image:' "${GITOPS_VALUES}"
+
+                        sed -i \
+                            's/^  tag:.*/  tag: "'"${IMAGE_TAG}"'"/' \
+                            "${GITOPS_VALUES}"
+
+                        echo "Updated image configuration:"
+                        grep -A3 '^image:' "${GITOPS_VALUES}"
+
+                        git config user.name "Jenkins"
+                        git config user.email "jenkins@local"
+
+                        git add "${GITOPS_VALUES}"
+
+                        if git diff --cached --quiet
+                        then
+                            echo "GitOps repository already contains image tag ${IMAGE_TAG}."
+                        else
+                            git commit \
+                                -m "Deploy my-java-app image ${IMAGE_TAG}"
+
+                            git push origin "${GITOPS_BRANCH}"
+
+                            echo "GitOps repository updated successfully."
+                        fi
+                    '''
+                }
             }
         }
 
-        stage('Verify Application') {
+        stage('Deployment Summary') {
             steps {
-                sh '''
-                    set -e
+                echo """
+========================================
+CI PIPELINE SUCCESS
+========================================
 
-                    kubectl get deployments -n "${NAMESPACE}"
-                    kubectl get pods -n "${NAMESPACE}" -o wide
-                    kubectl get svc -n "${NAMESPACE}"
+Image:
+${env.IMAGE_URI}:${env.IMAGE_TAG}
 
-                    kubectl wait \
-                        --for=condition=ready \
-                        pod \
-                        --all \
-                        -n "${NAMESPACE}" \
-                        --timeout=300s
-                '''
+Image pushed to:
+AWS ECR
+
+GitOps repository:
+${env.GITOPS_REPO}
+
+Argo CD will deploy the new image automatically.
+
+========================================
+"""
             }
         }
     }
@@ -272,24 +290,19 @@ pipeline {
     post {
 
         success {
-            echo 'PIPELINE SUCCESSFUL'
+            echo 'CI PIPELINE SUCCESSFUL - GITOPS REPOSITORY UPDATED'
         }
 
         failure {
-            echo 'PIPELINE FAILED'
-
-            sh '''
-                kubectl get pods -n "${NAMESPACE}" 2>/dev/null || true
-                kubectl get events \
-                    -n "${NAMESPACE}" \
-                    --sort-by=.lastTimestamp \
-                    2>/dev/null || true
-            '''
+            echo 'CI PIPELINE FAILED'
         }
 
         always {
             sh '''
-                docker logout "${ECR_REGISTRY}" 2>/dev/null || true
+                if [ -n "${ECR_REGISTRY}" ]
+                then
+                    docker logout "${ECR_REGISTRY}" 2>/dev/null || true
+                fi
             '''
         }
     }
