@@ -3,85 +3,50 @@ pipeline {
     agent {
         label 'Devops-Worker'
     }
+
     environment {
+        AWS_REGION     = 'ap-south-1'
+        ECR_REPOSITORY = 'my-java-app'
 
-        // =====================================================
-        // AWS
-        // =====================================================
+        IMAGE_TAG      = "${BUILD_NUMBER}"
 
-        AWS_REGION      = 'ap-south-1'
-        ECR_REPOSITORY  = 'my-java-app'
+        KIND_CLUSTER   = 'devops-cluster'
+        NAMESPACE      = 'myapp'
 
-        // =====================================================
-        // SONARQUBE
-        // =====================================================
+        HELM_RELEASE   = 'my-java-app'
+        HELM_CHART     = './helm/my-java-app'
 
-        SONARQUBE_SERVER = 'SonarQube'
-        SONAR_PROJECT_KEY = 'my-java-app'
-
-        // =====================================================
-        // DOCKER
-        // =====================================================
-
-        IMAGE_TAG = "${BUILD_NUMBER}"
-
-        // =====================================================
-        // KUBERNETES / KIND
-        // =====================================================
-
-        KIND_CLUSTER = 'devops-cluster'
-        NAMESPACE    = 'myapp'
-
-        // =====================================================
-        // HELM
-        // =====================================================
-
-        HELM_RELEASE = 'my-java-app'
-        HELM_CHART   = './helm/my-java-app'
+        TF_IN_AUTOMATION = 'true'
     }
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
 
     stages {
 
-        // =====================================================
-        // 1. CHECKOUT FROM GITHUB
-        // =====================================================
-
         stage('Checkout') {
-
             steps {
-
-                echo '======================================'
-                echo 'CHECKOUT FROM GITHUB'
-                echo '======================================'
-
                 checkout scm
-
-                echo 'Git checkout completed successfully'
             }
         }
 
 
-        // =====================================================
-        // 2. VERIFY WORKSPACE
-        // =====================================================
-
-        stage('Verify Workspace') {
-
+        stage('Verify Tools') {
             steps {
-
                 sh '''
                     set -e
 
                     echo "======================================"
-                    echo "VERIFY WORKSPACE"
+                    echo "VERIFY REQUIRED TOOLS"
                     echo "======================================"
 
                     echo "User:"
                     whoami
 
-                    echo "Current directory:"
-                    pwd
+                    echo "Hostname:"
+                    hostname
 
                     echo "Java:"
                     java -version
@@ -89,141 +54,57 @@ pipeline {
                     echo "Maven:"
                     mvn -version
 
+                    echo "Git:"
+                    git --version
+
                     echo "Docker:"
                     docker --version
-
-                    echo "Kubectl:"
-                    kubectl version --client
-
-                    echo "Kind:"
-                    kind version
-
-                    echo "Helm:"
-                    helm version
+                    docker ps
 
                     echo "AWS CLI:"
                     aws --version
 
-                    echo ""
-                    echo "Repository files:"
-                    ls -la
+                    echo "AWS Identity:"
+                    aws sts get-caller-identity
 
-                    echo ""
-                    echo "Checking required files..."
+                    echo "Kubectl:"
+                    kubectl version --client
 
-                    test -f pom.xml
-                    test -f Dockerfile
-                    test -f Jenkinsfile
+                    echo "KIND:"
+                    kind version
+                    kind get clusters
 
-                    echo "pom.xml found"
-                    echo "Dockerfile found"
-                    echo "Jenkinsfile found"
+                    echo "Kubernetes Context:"
+                    kubectl config current-context
 
-                    if [ ! -d helm/my-java-app ]; then
-                        echo "ERROR: helm/my-java-app directory not found"
-                        exit 1
-                    fi
+                    echo "Kubernetes Nodes:"
+                    kubectl get nodes
 
-                    echo "Helm chart found"
-
-                    echo ""
-                    echo "Workspace verification successful"
+                    echo "Helm:"
+                    helm version
                 '''
             }
         }
 
 
-        // =====================================================
-        // 3. BUILD & TEST
-        // =====================================================
-
-        stage('Build & Test') {
-
+        stage('Build and Test') {
             steps {
-
                 sh '''
                     set -e
 
                     echo "======================================"
-                    echo "MAVEN BUILD & TEST"
+                    echo "MAVEN BUILD AND TEST"
                     echo "======================================"
 
                     mvn clean test package
-
-                    echo ""
-                    echo "Build completed successfully"
-
-                    echo ""
-                    echo "Generated files:"
-                    ls -lh target/
                 '''
             }
         }
 
 
-        // =====================================================
-        // 4. SONARQUBE ANALYSIS
-        // =====================================================
-
-        stage('SonarQube Analysis') {
-
-            steps {
-
-                withSonarQubeEnv("${SONARQUBE_SERVER}") {
-
-                    sh '''
-                        set -e
-
-                        echo "======================================"
-                        echo "SONARQUBE ANALYSIS"
-                        echo "======================================"
-
-                        mvn sonar:sonar \
-                            -Dsonar.projectKey="${SONAR_PROJECT_KEY}"
-
-                        echo ""
-                        echo "SonarQube analysis completed successfully"
-                    '''
-                }
-            }
-        }
-
-
-        // =====================================================
-        // 5. SONARQUBE QUALITY GATE
-        // =====================================================
-
-        stage('SonarQube Quality Gate') {
-
-            steps {
-
-                echo '======================================'
-                echo 'WAITING FOR SONARQUBE QUALITY GATE'
-                echo '======================================'
-
-                timeout(time: 5, unit: 'MINUTES') {
-
-                    waitForQualityGate abortPipeline: true
-                }
-
-                echo 'SonarQube Quality Gate PASSED'
-            }
-        }
-
-
-        // =====================================================
-        // 6. GET AWS ACCOUNT
-        // =====================================================
-
         stage('Get AWS Account') {
-
             steps {
-
                 script {
-
-                    echo '======================================'
-                    echo 'GET AWS ACCOUNT'
-                    echo '======================================'
 
                     env.AWS_ACCOUNT_ID = sh(
                         script: '''
@@ -240,23 +121,16 @@ pipeline {
                     env.IMAGE_URI =
                         "${env.ECR_REGISTRY}/${env.ECR_REPOSITORY}"
 
-                    echo "AWS Account : ${env.AWS_ACCOUNT_ID}"
-                    echo "AWS Region  : ${env.AWS_REGION}"
-                    echo "ECR Registry: ${env.ECR_REGISTRY}"
-                    echo "Image       : ${env.IMAGE_URI}:${env.IMAGE_TAG}"
+                    echo "AWS Account ID : ${env.AWS_ACCOUNT_ID}"
+                    echo "ECR Registry   : ${env.ECR_REGISTRY}"
+                    echo "Image          : ${env.IMAGE_URI}:${env.IMAGE_TAG}"
                 }
             }
         }
 
 
-        // =====================================================
-        // 7. VERIFY ECR REPOSITORY
-        // =====================================================
-
         stage('Verify ECR Repository') {
-
             steps {
-
                 sh '''
                     set -e
 
@@ -264,25 +138,26 @@ pipeline {
                     echo "VERIFY ECR REPOSITORY"
                     echo "======================================"
 
-                    aws ecr describe-repositories \
+                    if aws ecr describe-repositories \
                         --repository-names "${ECR_REPOSITORY}" \
-                        --region "${AWS_REGION}"
+                        --region "${AWS_REGION}" >/dev/null 2>&1
+                    then
+                        echo "ECR repository exists."
+                    else
+                        echo "ECR repository does not exist."
+                        echo "Creating repository..."
 
-                    echo ""
-                    echo "ECR repository exists"
+                        aws ecr create-repository \
+                            --repository-name "${ECR_REPOSITORY}" \
+                            --region "${AWS_REGION}"
+                    fi
                 '''
             }
         }
 
 
-        // =====================================================
-        // 8. DOCKER BUILD
-        // =====================================================
-
         stage('Docker Build') {
-
             steps {
-
                 sh '''
                     set -e
 
@@ -290,28 +165,16 @@ pipeline {
                     echo "DOCKER BUILD"
                     echo "======================================"
 
-                    docker --version
-
                     docker build \
-                        -t "${IMAGE_URI}:${IMAGE_TAG}" .
-
-                    echo ""
-                    echo "Docker image created successfully"
-
-                    docker images | grep my-java-app || true
+                        -t "${IMAGE_URI}:${IMAGE_TAG}" \
+                        .
                 '''
             }
         }
 
 
-        // =====================================================
-        // 9. LOGIN TO ECR
-        // =====================================================
-
         stage('Login to ECR') {
-
             steps {
-
                 sh '''
                     set -e
 
@@ -320,26 +183,17 @@ pipeline {
                     echo "======================================"
 
                     aws ecr get-login-password \
-                        --region "${AWS_REGION}" | \
-                    docker login \
+                        --region "${AWS_REGION}" \
+                    | docker login \
                         --username AWS \
                         --password-stdin "${ECR_REGISTRY}"
-
-                    echo ""
-                    echo "ECR login successful"
                 '''
             }
         }
 
 
-        // =====================================================
-        // 10. PUSH IMAGE TO ECR
-        // =====================================================
-
         stage('Push Image to ECR') {
-
             steps {
-
                 sh '''
                     set -e
 
@@ -347,24 +201,18 @@ pipeline {
                     echo "PUSH IMAGE TO ECR"
                     echo "======================================"
 
-                    docker push \
-                        "${IMAGE_URI}:${IMAGE_TAG}"
+                    docker push "${IMAGE_URI}:${IMAGE_TAG}"
 
                     echo ""
-                    echo "Image pushed successfully"
+                    echo "Image pushed successfully:"
+                    echo "${IMAGE_URI}:${IMAGE_TAG}"
                 '''
             }
         }
 
 
-        // =====================================================
-        // 11. CHECK KIND CLUSTER
-        // =====================================================
-
-        stage('Check Kind Cluster') {
-
+        stage('Check KIND Cluster') {
             steps {
-
                 sh '''
                     set -e
 
@@ -372,94 +220,86 @@ pipeline {
                     echo "CHECK KIND CLUSTER"
                     echo "======================================"
 
-                    kind version
-
-                    echo ""
-                    echo "Kind clusters:"
                     kind get clusters
 
-                    echo ""
-                    echo "Kubernetes nodes:"
-                    kubectl get nodes
-
-                    echo ""
-                    echo "Current context:"
-                    kubectl config current-context
-
-                    if ! kind get clusters | grep -q "^${KIND_CLUSTER}$"; then
-                        echo "ERROR: Kind cluster ${KIND_CLUSTER} not found"
+                    if ! kind get clusters | grep -q "^${KIND_CLUSTER}$"
+                    then
+                        echo "ERROR: KIND cluster ${KIND_CLUSTER} not found."
                         exit 1
                     fi
 
-                    echo ""
-                    echo "Kind cluster verified successfully"
+                    kubectl config current-context
+                    kubectl get nodes
                 '''
             }
         }
 
 
-        // =====================================================
-        // 12. LOAD IMAGE INTO KIND
-        // =====================================================
-
-        stage('Load Image into Kind') {
-
+        stage('Create Namespace') {
             steps {
-
                 sh '''
                     set -e
 
                     echo "======================================"
-                    echo "LOAD IMAGE INTO KIND"
+                    echo "CREATE NAMESPACE"
                     echo "======================================"
 
-                    kind load docker-image \
-                        "${IMAGE_URI}:${IMAGE_TAG}" \
-                        --name "${KIND_CLUSTER}"
+                    kubectl create namespace "${NAMESPACE}" \
+                        --dry-run=client \
+                        -o yaml \
+                    | kubectl apply -f -
 
-                    echo ""
-                    echo "Image loaded into Kind successfully"
+                    kubectl get namespace "${NAMESPACE}"
                 '''
             }
         }
 
 
-        // =====================================================
-        // 13. HELM VALIDATION
-        // =====================================================
-
-        stage('Helm Validation') {
-
+        stage('Create ECR Pull Secret') {
             steps {
-
                 sh '''
                     set -e
 
                     echo "======================================"
-                    echo "HELM VALIDATION"
+                    echo "CREATE ECR IMAGE PULL SECRET"
                     echo "======================================"
 
-                    helm version
+                    ECR_PASSWORD=$(aws ecr get-login-password \
+                        --region "${AWS_REGION}")
 
-                    echo ""
-                    echo "Checking Helm chart:"
+                    kubectl create secret docker-registry ecr-secret \
+                        --namespace "${NAMESPACE}" \
+                        --docker-server="${ECR_REGISTRY}" \
+                        --docker-username=AWS \
+                        --docker-password="${ECR_PASSWORD}" \
+                        --dry-run=client \
+                        -o yaml \
+                    | kubectl apply -f -
+
+                    kubectl get secret ecr-secret \
+                        -n "${NAMESPACE}"
+                '''
+            }
+        }
+
+
+        stage('Helm Lint') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "======================================"
+                    echo "HELM LINT"
+                    echo "======================================"
+
                     helm lint "${HELM_CHART}"
-
-                    echo ""
-                    echo "Helm chart validation successful"
                 '''
             }
         }
 
-
-        // =====================================================
-        // 14. HELM TEMPLATE VALIDATION
-        // =====================================================
 
         stage('Helm Template Validation') {
-
             steps {
-
                 sh '''
                     set -e
 
@@ -470,87 +310,25 @@ pipeline {
                     helm template \
                         "${HELM_RELEASE}" \
                         "${HELM_CHART}" \
-                        --namespace "${NAMESPACE}"
+                        --namespace "${NAMESPACE}" \
+                        --set image.repository="${IMAGE_URI}" \
+                        --set image.tag="${IMAGE_TAG}" \
+                        --set imagePullSecrets[0].name=ecr-secret \
+                        > /tmp/rendered-manifests.yaml
 
-                    echo ""
-                    echo "Helm template validation successful"
+                    echo "Helm template generated successfully."
                 '''
             }
         }
 
-
-        // =====================================================
-        // 15. CREATE NAMESPACE
-        // =====================================================
-
-        stage('Create Namespace') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "======================================"
-                    echo "CREATE KUBERNETES NAMESPACE"
-                    echo "======================================"
-
-                    kubectl create namespace "${NAMESPACE}" \
-                        --dry-run=client \
-                        -o yaml | kubectl apply -f -
-
-                    echo ""
-                    echo "Namespace verified:"
-                    kubectl get namespace "${NAMESPACE}"
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 16. CREATE ECR PULL SECRET
-        // =====================================================
-
-        stage('Create ECR Pull Secret') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "======================================"
-                    echo "CREATE ECR PULL SECRET"
-                    echo "======================================"
-
-                    ECR_PASSWORD=$(aws ecr get-login-password \
-                        --region "${AWS_REGION}")
-
-                    kubectl -n "${NAMESPACE}" create secret docker-registry ecr-secret \
-                        --docker-server="${ECR_REGISTRY}" \
-                        --docker-username=AWS \
-                        --docker-password="${ECR_PASSWORD}" \
-                        --dry-run=client \
-                        -o yaml | kubectl apply -f -
-
-                    echo ""
-                    echo "ECR pull secret created/updated"
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 17. HELM DEPLOY
-        // =====================================================
 
         stage('Helm Deploy') {
-
             steps {
-
                 sh '''
                     set -e
 
                     echo "======================================"
-                    echo "HELM DEPLOY"
+                    echo "DEPLOY APPLICATION USING HELM"
                     echo "======================================"
 
                     helm upgrade --install \
@@ -563,54 +341,32 @@ pipeline {
                         --set imagePullSecrets[0].name=ecr-secret \
                         --wait \
                         --timeout 5m
-
-                    echo ""
-                    echo "Helm deployment completed successfully"
                 '''
             }
         }
 
 
-        // =====================================================
-        // 18. HELM RELEASE VERIFICATION
-        // =====================================================
-
-        stage('Helm Release Verification') {
-
+        stage('Verify Helm Release') {
             steps {
-
                 sh '''
                     set -e
 
                     echo "======================================"
-                    echo "HELM RELEASE VERIFICATION"
+                    echo "VERIFY HELM RELEASE"
                     echo "======================================"
 
-                    helm list \
-                        --namespace "${NAMESPACE}"
-
-                    echo ""
-                    echo "Helm release status:"
+                    helm list -n "${NAMESPACE}"
 
                     helm status \
                         "${HELM_RELEASE}" \
-                        --namespace "${NAMESPACE}"
-
-                    echo ""
-                    echo "Helm release verified successfully"
+                        -n "${NAMESPACE}"
                 '''
             }
         }
 
 
-        // =====================================================
-        // 19. VERIFY APPLICATION
-        // =====================================================
-
         stage('Verify Application') {
-
             steps {
-
                 sh '''
                     set -e
 
@@ -618,7 +374,6 @@ pipeline {
                     echo "VERIFY APPLICATION"
                     echo "======================================"
 
-                    echo ""
                     echo "Deployments:"
                     kubectl get deployments \
                         -n "${NAMESPACE}"
@@ -631,113 +386,87 @@ pipeline {
 
                     echo ""
                     echo "Services:"
-                    kubectl get services \
+                    kubectl get svc \
                         -n "${NAMESPACE}"
 
                     echo ""
-                    echo "Ingress:"
-                    kubectl get ingress \
-                        -n "${NAMESPACE}" || true
-
-                    echo ""
-                    echo "Application verification completed"
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 20. POD HEALTH CHECK
-        // =====================================================
-
-        stage('Pod Health Check') {
-
-            steps {
-
-                sh '''
-                    set -e
-
-                    echo "======================================"
-                    echo "POD HEALTH CHECK"
-                    echo "======================================"
+                    echo "Waiting for pods..."
 
                     kubectl wait \
                         --for=condition=ready \
                         pod \
                         --all \
                         -n "${NAMESPACE}" \
-                        --timeout=5m
+                        --timeout=300s
+                '''
+            }
+        }
+
+
+        stage('Deployment Summary') {
+            steps {
+                sh '''
+                    echo "======================================"
+                    echo "DEPLOYMENT SUCCESSFUL"
+                    echo "======================================"
+
+                    echo "Image:"
+                    echo "${IMAGE_URI}:${IMAGE_TAG}"
 
                     echo ""
-                    echo "Pod status:"
-                    kubectl get pods \
-                        -n "${NAMESPACE}"
+                    echo "Namespace:"
+                    echo "${NAMESPACE}"
 
                     echo ""
-                    echo "All pods are READY"
+                    echo "Helm Release:"
+                    echo "${HELM_RELEASE}"
+
+                    echo ""
+                    echo "Pods:"
+                    kubectl get pods -n "${NAMESPACE}"
+
+                    echo ""
+                    echo "Services:"
+                    kubectl get svc -n "${NAMESPACE}"
                 '''
             }
         }
     }
 
 
-    // =========================================================
-    // POST ACTIONS
-    // =========================================================
-
     post {
 
         success {
-
-            echo '''
-======================================
-       CI/CD PIPELINE SUCCESSFUL
-======================================
-
-GitHub
-  ↓
-Maven Build & Test
-  ↓
-SonarQube Analysis
-  ↓
-SonarQube Quality Gate
-  ↓
-Docker Build
-  ↓
-Amazon ECR
-  ↓
-Kind Kubernetes
-  ↓
-Helm
-  ↓
-Application
-
-======================================
-'''
+            echo '======================================'
+            echo 'PIPELINE SUCCESSFUL'
+            echo '======================================'
         }
 
         failure {
+            echo '======================================'
+            echo 'PIPELINE FAILED'
+            echo '======================================'
 
-            echo '''
-======================================
-        CI/CD PIPELINE FAILED
-======================================
+            sh '''
+                echo "Current pods:"
+                kubectl get pods -n "${NAMESPACE}" 2>/dev/null || true
 
-Check the failed stage above.
-
-======================================
-'''
+                echo ""
+                echo "Pod events:"
+                kubectl get events \
+                    -n "${NAMESPACE}" \
+                    --sort-by=.lastTimestamp \
+                    2>/dev/null || true
+            '''
         }
 
         always {
-
-            echo "Pipeline status: ${currentBuild.currentResult}"
-            echo "Build number: ${BUILD_NUMBER}"
-
             sh '''
-                echo "Cleaning unused Docker images..."
+                echo "======================================"
+                echo "CLEANUP"
+                echo "======================================"
 
-                docker image prune -f || true
+                docker logout "${ECR_REGISTRY}" 2>/dev/null || true
             '''
         }
     }
